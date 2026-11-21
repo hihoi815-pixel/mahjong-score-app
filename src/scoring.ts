@@ -35,7 +35,7 @@ export function calculateRound(entries: readonly Entry[]) {
   }
 
   const ranked = rankEntries(entries)
-  const baseScores = ranked.map(row => Math.floor(row.points / 1000) - START_POINTS / 1000)
+  const baseScores = ranked.map(row => Math.ceil(row.points / 1000) - START_POINTS / 1000)
   const topScore = -baseScores.slice(1).reduce((sum, score) => sum + score, 0)
   baseScores[0] = topScore === 0 ? 0 : topScore
 

@@ -5,12 +5,12 @@ const entries = (points: number[], chips = [0, 0, 0, 0]) =>
   points.map((value, index) => ({ points: value, chips: chips[index] }))
 
 describe('半荘の精算', () => {
-  it('2〜4位を切り捨て、トップで端数を調整し、ウマとチップを精算する', () => {
+  it('2〜4位を切り上げ、トップで端数を調整し、ウマとチップを精算する', () => {
     const result = calculateRound(entries([20700, 40100, 10500, 28700], [-2, 2, -1, 1]))
     expect(result.map(row => row.index)).toEqual([1, 3, 0, 2])
-    expect(result.map(row => row.baseScore)).toEqual([17, 3, -5, -15])
+    expect(result.map(row => row.baseScore)).toEqual([14, 4, -4, -14])
     expect(result.map(row => row.uma)).toEqual([20, 10, -10, -20])
-    expect(result.map(row => row.net)).toEqual([2050, 750, -950, -1850])
+    expect(result.map(row => row.net)).toEqual([1900, 800, -900, -1800])
     expect(result.reduce((sum, row) => sum + row.net, 0)).toBe(0)
   })
 
@@ -28,9 +28,9 @@ describe('半荘の精算', () => {
     expect(result.map(row => row.index)).toEqual([3, 1, 0, 2])
   })
 
-  it('負の持ち点も1,000点未満を切り捨てる', () => {
+  it('負の持ち点も1,000点未満を切り上げる', () => {
     const result = calculateRound(entries([50100, 30400, 20000, -500]))
-    expect(result.map(row => row.baseScore)).toEqual([26, 5, -5, -26])
+    expect(result.map(row => row.baseScore)).toEqual([24, 6, -5, -25])
     expect(result.reduce((sum, row) => sum + row.net, 0)).toBe(0)
   })
 
