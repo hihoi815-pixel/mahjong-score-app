@@ -15,6 +15,11 @@ type Result = ReturnType<typeof calculateRound>
 const number = new Intl.NumberFormat('ja-JP')
 const date = new Intl.DateTimeFormat('ja-JP', { dateStyle: 'medium', timeStyle: 'short' })
 
+function dayKey(value: Date) {
+  return [value.getFullYear(), value.getMonth() + 1, value.getDate()]
+    .map(part => String(part).padStart(2, '0')).join('-')
+}
+
 function signed(value: number) {
   return (value > 0 ? '+' : '') + number.format(value)
 }
@@ -56,7 +61,10 @@ function loadData() {
 function App() {
   const [initial] = useState(loadData)
   const [data, setData] = useState(initial.data)
-  const [tab, setTab] = useState<Tab>('input')
+  const [sessionDate, setSessionDate] = useState(() => {
+    const editing = initial.data.rounds.find(round => round.id === initial.data.editing?.id)
+    return dayKey(editing ? new Date(editing.date) : new Date())
+  })
   const [settings, setSettings] = useState(false)
   const [notice, setNotice] = useState(initial.error)
   const [storageError, setStorageError] = useState(false)
@@ -83,6 +91,17 @@ function App() {
     ? calculateRound(entries) : null
   const ranks = pointsOk ? rankEntries(entries) : []
   const rounds = data.rounds.map(round => ({ ...round, result: calculateRound(round.entries) }))
+  const savedDates = [...new Set(rounds.map(round => dayKey(new Date(round.date))))].sort().reverse()
+  const dailyRounds = rounds.filter(round => dayKey(new Date(round.date)) === sessionDate)
+  const dayTotals = names.map((name, index) => {
+    const rows = dailyRounds.flatMap(round => round.result.filter(row => row.index === index))
+    return {
+      name,
+      net: rows.reduce((sum, row) => sum + row.net, 0),
+      score: rows.reduce((sum, row) => sum + row.baseScore + row.uma, 0),
+      chips: rows.reduce((sum, row) => sum + row.chips, 0),
+    }
+  })
   const stats = names.map((name, index) => {
     const played = rounds.flatMap(round => round.result.filter(row => row.index === index))
     return {
@@ -94,9 +113,8 @@ function App() {
   }).sort((a, b) => b.net - a.net || a.index - b.index)
 
   function navigate(next: Tab) {
-    setTab(next)
     setSettings(false)
-    window.scrollTo(0, 0)
+    requestAnimationFrame(() => document.getElementById(next)?.scrollIntoView({ block: 'start' }))
   }
 
   function changeValue(index: number, field: 'points' | 'chips', value: string | number) {
@@ -116,7 +134,10 @@ function App() {
   function saveRound() {
     if (!result) return
     const id = data.editing?.id
-    const newRound = id ? null : { id: crypto.randomUUID(), date: new Date().toISOString(), entries }
+    const now = new Date()
+    const playedAt = sessionDate === dayKey(now) ? now : new Date(sessionDate + 'T12:00:00')
+    if (!Number.isFinite(playedAt.getTime())) return
+    const newRound = id ? null : { id: crypto.randomUUID(), date: playedAt.toISOString(), entries }
     setData(current => newRound
       ? { ...current, rounds: [newRound, ...current.rounds], draft: newDraft() }
       : { ...current, rounds: current.rounds.map(round => round.id === id ? { ...round, entries } : round), editing: null })
@@ -132,6 +153,8 @@ function App() {
       const restored = parseBackup(await file.text())
       if (!window.confirm('現在のデータをバックアップの内容で上書きしますか？')) return
       setData(restored)
+      const editing = restored.rounds.find(round => round.id === restored.editing?.id)
+      setSessionDate(dayKey(editing ? new Date(editing.date) : new Date()))
       setNotice('バックアップを復元しました。')
       navigate('input')
     } catch {
@@ -141,18 +164,24 @@ function App() {
 
   return <>
     <header className="top"><div className="top-content">
-      <div className="brand"><span className="tile" aria-hidden="true">東</span><strong>麻雀点帳</strong></div>
-      <button type="button" className="settings-button" aria-expanded={settings} onClick={() => {
-        setSettings(!settings)
-        window.scrollTo(0, 0)
-      }}>{settings ? '閉じる' : '設定'}</button>
+      <div className="hero-heading">
+        <div className="brand"><span className="brand-mark" aria-hidden="true">四</span> 四人打ち</div>
+        <button type="button" className="settings-button" aria-expanded={settings} onClick={() => {
+          setSettings(!settings)
+          window.scrollTo(0, 0)
+        }}>{settings ? '閉じる' : '設定'}</button>
+      </div>
+      <h1>麻雀点数帳</h1>
+      <p className="hero-names">{names.join('・')}</p>
+      <div className="rates"><span>1,000点 <b>50円</b></span><span>チップ1枚 <b>100円</b></span><span>ウマ <b>10–20</b></span></div>
+      <div className="tiles" aria-hidden="true"><span>東</span><span>南</span></div>
     </div></header>
 
     <main>
       {storageError && <p className="warning" role="alert">自動保存できません。設定からJSONバックアップを保存してください。</p>}
       {notice && <div className="notice" role="status">{notice}<button type="button" aria-label="通知を閉じる" onClick={() => setNotice('')}>×</button></div>}
       {settings ? <>
-        <h1>設定</h1>
+        <h2>設定</h2>
         <section className="panel"><h2>プレイヤー名</h2>
           <p className="muted">名前の変更は履歴と累計成績にも反映されます。</p>
           <div className="name-fields">{data.names.map((name, index) =>
@@ -174,13 +203,28 @@ function App() {
           <button type="button" className="danger erase" onClick={() => {
             if (!window.confirm('対局履歴、プレイヤー名、入力途中のデータをすべて削除しますか？')) return
             setData(newData())
+            setSessionDate(dayKey(new Date()))
             setNotice('全データを削除しました。')
             navigate('input')
           }}>全データを削除</button>
         </section>
-      </> : tab === 'input' ? <>
-        <div className="heading"><div><h1>{data.editing ? '対局を編集' : '点数入力'}</h1>
+      </> : <>
+        <section className="panel session" aria-labelledby="session-heading">
+          <h2 id="session-heading">対局日</h2>
+          <div className="name-fields">
+            <label>日付を選ぶ<input type="date" value={sessionDate} disabled={Boolean(data.editing)}
+              onChange={event => { if (event.target.value) setSessionDate(event.target.value) }} /></label>
+            <label>保存済みの対局<select value={savedDates.includes(sessionDate) ? sessionDate : ''}
+              disabled={Boolean(data.editing) || savedDates.length === 0} onChange={event => setSessionDate(event.target.value)}>
+              <option value="" disabled>{savedDates.length ? '対局日を選ぶ' : '保存済みの対局なし'}</option>
+              {savedDates.map(day => <option key={day} value={day}>{day.replaceAll('-', '/')}</option>)}
+            </select></label>
+          </div>
+        </section>
+        <section className="panel" id="input" aria-labelledby="score-heading">
+        <div className="heading"><div><h2 id="score-heading">{data.editing ? '対局を編集' : '半荘の得点'}</h2>
           <p className="muted">4人打ち ／ 25,000点返し ／ ウマ 10–20</p></div>
+          {!data.editing && <span className="rank">第{dailyRounds.length + 1}半荘</span>}
           {data.editing && <button type="button" onClick={() => {
             setData(current => ({ ...current, editing: null }))
             navigate('history')
@@ -191,23 +235,34 @@ function App() {
         </p>
         <div className="player-grid">{draft.map((row, index) => {
           const rank = ranks.findIndex(player => player.index === index) + 1
-          return <section className="panel player" key={index}>
+          return <div className="player" key={index}>
             <div className="player-heading"><h2>{names[index]}</h2><span className="rank">{rank ? `${rank}位` : '—'}</span></div>
-            <input className="score" aria-label={`${names[index]}の点数`} type="text" inputMode="decimal"
+            <div className="score-control"><input className="score" aria-label={`${names[index]}の点数`} type="text" inputMode="decimal"
               autoComplete="off" value={row.points} onFocus={event => event.currentTarget.select()}
               onChange={event => changeValue(index, 'points', event.target.value)} />
+              <button type="button" aria-label={`${names[index]}の点数の正負を切り替える`}
+                onClick={() => changeValue(index, 'points', row.points.startsWith('-') ? row.points.slice(1) : '-' + row.points.replace(/^\+/, ''))}>±</button>
+            </div>
             <div className="increments">{[-1000, -100, 100, 1000].map(step =>
               <button type="button" key={step} aria-label={`${names[index]}の点数 ${signed(step)}点`}
                 onClick={() => changeValue(index, 'points', step)}>{signed(step)}</button>)}</div>
-            <div className="chip-line"><span>チップ</span><div className="chip-control">
+          </div>
+        })}</div>
+        </section>
+        <section className="panel" aria-labelledby="chip-heading">
+          <h2 id="chip-heading">チップの増減</h2>
+          <div className="player-grid">{draft.map((row, index) => <div className="player" key={index}>
+            <strong>{names[index]}</strong>
+            <div className="chip-control">
               <button type="button" aria-label={`${names[index]}のチップを1枚減らす`} onClick={() => changeValue(index, 'chips', -1)}>−</button>
               <input aria-label={`${names[index]}のチップ枚数`} type="text" inputMode="decimal" value={row.chips}
                 onFocus={event => event.currentTarget.select()} onChange={event => changeValue(index, 'chips', event.target.value)} />
               <button type="button" aria-label={`${names[index]}のチップを1枚増やす`} onClick={() => changeValue(index, 'chips', 1)}>＋</button>
-            </div></div>
-          </section>
-        })}</div>
-        <section className="panel preview"><h2>収支の確認</h2>
+            </div>
+          </div>)}</div>
+          <p className="muted" aria-live="polite">チップ合計 {chipsOk ? signed(chipTotal) + '枚' : '—'}</p>
+        </section>
+        <section className="panel preview"><h2>半荘の収支を確認</h2>
           <div aria-live="polite">
             {!pointsOk && <p className="warning">4人の点数を100点単位の整数で入力してください。</p>}
             {pointsOk && pointTotal !== TOTAL_POINTS && <p className="warning">点数合計を100,000点にしてください。</p>}
@@ -217,11 +272,19 @@ function App() {
           {result && <Results rows={result} names={names} detailed />}
           <button type="button" className="primary" disabled={!result} onClick={saveRound}>{data.editing ? '変更を保存' : 'この半荘を登録'}</button>
         </section>
-      </> : tab === 'history' ? <>
-        <h1>履歴</h1><p className="muted">全 {rounds.length} 半荘</p>
-        {rounds.length === 0 && <p className="panel empty">登録された対局はありません。</p>}
-        {rounds.map((round, index) => <article className="panel history" key={round.id}>
-          <div className="heading"><h2>第 {rounds.length - index} 半荘</h2><time dateTime={round.date}>{date.format(new Date(round.date))}</time></div>
+        <section className="panel" aria-labelledby="day-total-heading">
+          <div className="heading"><h2 id="day-total-heading">対局日の収支</h2><span className="rank">{dailyRounds.length}半荘</span></div>
+          <div className="player-grid">{dayTotals.map((player, index) => <div className="day-total" key={index}>
+            <strong>{player.name}</strong>
+            <div className="day-money"><Money value={player.net} /></div>
+            <small>得点 {signed(player.score)} ／ チップ {signed(player.chips)}枚</small>
+          </div>)}</div>
+        </section>
+        <section className="panel" id="history" aria-labelledby="history-heading">
+        <h2 id="history-heading">対局履歴</h2><p className="muted">{sessionDate.replaceAll('-', '/')} ／ {dailyRounds.length}半荘</p>
+        {dailyRounds.length === 0 && <p className="empty">この日の対局はありません。</p>}
+        {dailyRounds.map((round, index) => <article className="panel history" key={round.id}>
+          <div className="heading"><h3>第 {dailyRounds.length - index} 半荘</h3><time dateTime={round.date}>{date.format(new Date(round.date))}</time></div>
           <Results rows={round.result} names={names} detailed />
           <div className="actions">
             <button type="button" onClick={() => {
@@ -234,17 +297,18 @@ function App() {
               navigate('input')
             }}>編集</button>
             <button type="button" className="danger" onClick={() => {
-              if (!window.confirm(`第 ${rounds.length - index} 半荘を削除しますか？`)) return
+              if (!window.confirm(`第 ${dailyRounds.length - index} 半荘を削除しますか？`)) return
               setData(current => ({ ...current, rounds: current.rounds.filter(item => item.id !== round.id),
                 editing: current.editing?.id === round.id ? null : current.editing }))
               setNotice('対局を削除しました。')
             }}>削除</button>
           </div>
         </article>)}
-      </> : <>
-        <h1>累計成績</h1><p className="muted">全 {rounds.length} 半荘</p>
-        {rounds.length === 0 && <p className="panel empty">半荘を登録すると、収支ランキングとプレイヤー別の成績を表示します。</p>}
-        {rounds.length > 0 && <section className="panel"><h2>収支ランキング</h2>
+        </section>
+        <section className="panel" id="stats" aria-labelledby="stats-heading">
+        <h2 id="stats-heading">累計成績</h2><p className="muted">全 {rounds.length} 半荘</p>
+        {rounds.length === 0 && <p className="empty">半荘を登録すると、収支ランキングとプレイヤー別の成績を表示します。</p>}
+        {rounds.length > 0 && <div className="ranking"><h3>収支ランキング</h3>
           <ol className="results">{stats.map(player => <li key={player.index}>
             <span className="rank">{stats.findIndex(item => item.net === player.net) + 1}位</span>
             <div className="result-name"><strong>{player.name}</strong>
@@ -252,12 +316,13 @@ function App() {
             </div>
             <strong className="result-money"><Money value={player.net} /></strong>
           </li>)}</ol>
-        </section>}
+        </div>}
+        </section>
       </>}
     </main>
 
     <nav className="bottom" aria-label="メインメニュー"><div className="nav-content">{tabs.map(item =>
-      <button type="button" key={item.id} aria-current={!settings && tab === item.id ? 'page' : undefined} onClick={() => navigate(item.id)}>
+      <button type="button" key={item.id} onClick={() => navigate(item.id)}>
         <span aria-hidden="true">{item.icon}</span>{item.label}
       </button>)}</div></nav>
   </>
