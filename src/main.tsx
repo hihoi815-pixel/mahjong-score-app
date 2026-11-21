@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { createRoot } from 'react-dom/client'
 import { makeCsv, newData, newDraft, parseBackup, readNumber, STORAGE_KEY, type Data } from './data'
 import { calculateRound, rankEntries, TOTAL_POINTS, validChips, validPoints } from './scoring'
+import { validConnection } from './sheetSync'
+import { useSheetSync } from './useSheetSync'
 import './style.css'
 
 const tabs = [
@@ -61,6 +63,9 @@ function loadData() {
 function App() {
   const [initial] = useState(loadData)
   const [data, setData] = useState(initial.data)
+  const sync = useSheetSync(data)
+  const [sheetUrl, setSheetUrl] = useState(sync.connection?.url ?? '')
+  const [sheetKey, setSheetKey] = useState('')
   const [sessionDate, setSessionDate] = useState(() => {
     const editing = initial.data.rounds.find(round => round.id === initial.data.editing?.id)
     return dayKey(editing ? new Date(editing.date) : new Date())
@@ -151,7 +156,7 @@ function App() {
     if (!file) return
     try {
       const restored = parseBackup(await file.text())
-      if (!window.confirm('現在のデータをバックアップの内容で上書きしますか？')) return
+      if (!window.confirm('現在のデータをバックアップの内容で上書きしますか？連携中はシートにも反映されます。')) return
       setData(restored)
       const editing = restored.rounds.find(round => round.id === restored.editing?.id)
       setSessionDate(dayKey(editing ? new Date(editing.date) : new Date()))
@@ -179,6 +184,7 @@ function App() {
 
     <main>
       {storageError && <p className="warning" role="alert">自動保存できません。設定からJSONバックアップを保存してください。</p>}
+      {sync.status === 'error' && <p className="warning" role="alert">スプレッドシートに反映できませんでした。対局はこのブラウザに保存されています。設定から再送できます。</p>}
       {notice && <div className="notice" role="status">{notice}<button type="button" aria-label="通知を閉じる" onClick={() => setNotice('')}>×</button></div>}
       {settings ? <>
         <h2>設定</h2>
@@ -193,6 +199,51 @@ function App() {
             </label>)}
           </div>
         </section>
+        <section className="panel"><h2>Googleスプレッドシート連携</h2>
+          <p className="muted" role="status">{{
+            off: '未連携', pending: '反映中…', done: 'スプレッドシートに反映済み', error: '反映待ち',
+          }[sync.status]}</p>
+          <form onSubmit={event => {
+            event.preventDefault()
+            const url = sheetUrl.trim()
+            const key = sheetKey.trim() || (url === sync.connection?.url ? sync.connection.key : '')
+            if (!validConnection(url, key)) {
+              setNotice('Apps ScriptのウェブアプリURLと連携キーを入力してください。')
+              return
+            }
+            try {
+              sync.configure({ url, key, managed: url === sync.connection?.url ? sync.connection.managed : [] })
+              setSheetKey('')
+              setNotice('連携設定を保存しました。対局の反映結果は上の状態表示で確認できます。')
+            } catch {
+              setNotice('連携設定をこのブラウザに保存できませんでした。')
+            }
+          }}>
+            <div className="name-fields">
+              <label>ウェブアプリURL<input type="url" value={sheetUrl} autoComplete="off"
+                onChange={event => setSheetUrl(event.target.value)} /></label>
+              <label>連携キー<input type="password" value={sheetKey} autoComplete="new-password"
+                placeholder={sync.connection ? '登録済み' : undefined} onChange={event => setSheetKey(event.target.value)} /></label>
+            </div>
+            <div className="actions">
+              <button type="submit">連携設定を保存</button>
+              {sync.connection && <>
+                <button type="button" disabled={sync.status === 'pending'} onClick={sync.retry}>今すぐ再送</button>
+                <button type="button" onClick={() => {
+                  if (!window.confirm('このブラウザのスプレッドシート連携を解除しますか？')) return
+                  try {
+                    sync.configure(null)
+                    setSheetUrl('')
+                    setSheetKey('')
+                  } catch {
+                    setNotice('連携設定を解除できませんでした。')
+                  }
+                }}>連携解除</button>
+              </>}
+            </div>
+          </form>
+          <p className="muted"><a href="https://github.com/hihoi815-pixel/mahjong-score-app#googleスプレッドシートに自動保存する" target="_blank" rel="noreferrer">初回設定の手順</a></p>
+        </section>
         <section className="panel"><h2>データ管理</h2>
           <div className="actions">
             <button type="button" onClick={() => download(JSON.stringify(data, null, 2), 'mahjong-backup.json', 'application/json')}>JSONバックアップ</button>
@@ -201,7 +252,7 @@ function App() {
             <input type="file" accept=".json,application/json" ref={importInput} onChange={restore} hidden />
           </div>
           <button type="button" className="danger erase" onClick={() => {
-            if (!window.confirm('対局履歴、プレイヤー名、入力途中のデータをすべて削除しますか？')) return
+            if (!window.confirm('対局履歴、プレイヤー名、入力途中のデータをすべて削除しますか？連携中はこのブラウザで同期した対局もシートから削除されます。')) return
             setData(newData())
             setSessionDate(dayKey(new Date()))
             setNotice('全データを削除しました。')
